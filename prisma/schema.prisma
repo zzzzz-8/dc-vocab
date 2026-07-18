@@ -1,0 +1,396 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== Enums ====================
+enum Role {
+  STUDENT
+  TEACHER
+  PARENT
+}
+
+enum Membership {
+  FREE
+  PERSONAL
+  COACH
+  INSTITUTION
+}
+
+enum WordStatus {
+  NEW       // 全新未学
+  LEARNING  // 学习中
+  FAMILIAR  // 熟悉
+  MASTERED  // 掌握
+  FORGOTTEN // 遗忘
+}
+
+// ==================== User & Auth ====================
+model User {
+  id              String     @id @default(cuid())
+  username        String     @unique
+  email           String?    @unique
+  password        String
+  nickname        String?
+  avatar          String?    @default("default-avatar.png")
+  phone           String?
+  role            Role       @default(STUDENT)
+  membership      Membership @default(FREE)
+  membershipExpiry DateTime?
+  credits         Int        @default(0)
+  totalWords      Int        @default(0)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  // Relations
+  students         StudentAccount[]  @relation("TeacherStudents")
+  reviewRecords    ReviewRecord[]
+  userWords        UserWord[]
+  dailyStats       DailyStats[]
+  favorites        WordFavorite[]
+  userWordBooks    UserWordBook[]
+  assessments      VocabularyTest[]
+  referrals        ReferralRecord[]
+  coursewares      Courseware[]
+  learningSessions LearningSession[]
+  homeworks        HomeworkRecord[]
+}
+
+// ==================== Student Account (教师创建的学生账号) ====================
+model StudentAccount {
+  id             String   @id @default(cuid())
+  name           String
+  account        String   @unique
+  password       String
+  phone          String?
+  wordbookId     String?  // 当前词书
+  reviewCount    Int      @default(0)
+  remainingHours Float    @default(0)
+  note           String?
+  teacherId      String
+  teacher        User     @relation("TeacherStudents", fields: [teacherId], references: [id])
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([teacherId])
+}
+
+// ==================== Word Books ====================
+model WordBook {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  coverImage  String?
+  grade       String?  // 六年级上册/七年级...
+  publisher   String?  // 牛津上海版/人教PEP版...
+  level       String   // 小学/初中/高中/大学/自定义
+  wordCount   Int      @default(0)
+  category    String?  // general, exam, daily
+  isCustom    Boolean  @default(false)
+  userId      String?  // 自定义词书的创建者
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  words         Word[]
+  userWordBooks UserWordBook[]
+  coursewares   Courseware[]
+}
+
+// ==================== Words ====================
+model Word {
+  id           String   @id @default(cuid())
+  wordBookId   String
+  word         String
+  phonetic     String?  // 音标（通用）
+  phoneticUS   String?  // 美式音标
+  phoneticUK   String?  // 英式音标
+  meaning      String   // 中文释义
+  partOfSpeech String?  // 词性 n./v./adj....
+  definition   String?  // 详细中文释义
+  definitionEn String?  // 英文释义
+  examples     String?  // 例句 (JSON array)
+  synonyms     String?  // 近义词 (JSON array)
+  antonyms     String?  // 反义词 (JSON array)
+  rootAffix    String?  // 词根词缀
+  wordForm     String?  // 词形变化
+  memoryTip    String?  // 记忆技巧
+  frequency    Int      @default(0)
+  difficulty   Int      @default(1)
+  audioUrlUS   String?  // 美式发音URL
+  audioUrlUK   String?  // 英式发音URL
+  imageUrl     String?  // 图片
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  wordBook        WordBook      @relation(fields: [wordBookId], references: [id])
+  reviewRecords   ReviewRecord[]
+  userWords       UserWord[]
+  favorites       WordFavorite[]
+  homeworks       HomeworkRecord[]
+
+  @@index([wordBookId])
+  @@index([word])
+}
+
+// ==================== User-WordBook subscription ====================
+model UserWordBook {
+  id          String    @id @default(cuid())
+  userId      String
+  wordBookId  String
+  progress    Int       @default(0) // 学习进度百分比
+  isActive    Boolean   @default(true)
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  user    User    @relation(fields: [userId], references: [id])
+  wordBook WordBook @relation(fields: [wordBookId], references: [id])
+
+  @@unique([userId, wordBookId])
+  @@index([userId])
+}
+
+// ==================== User-Word (统一学习状态，含错词本标记) ====================
+// stage: 0=遗忘, 1=一阶, 2=二阶, 3=三阶, 4=四阶, 5=五阶, 6=六阶, 7=掌握
+// isInErrorBook = true 时该单词出现在错词本中
+model UserWord {
+  id            String     @id @default(cuid())
+  userId        String
+  wordId        String
+  wordBookId    String?
+
+  // 6阶循环记忆: 0=遗忘, 1=一阶, 2=二阶, 3=三阶, 4=四阶, 5=五阶, 6=六阶, 7=掌握
+  stage         Int        @default(0)
+  status        WordStatus @default(NEW)
+  errorCount    Int        @default(0)
+  isInErrorBook Boolean    @default(false)
+  note          String?
+  nextReviewAt  DateTime   // 下次复习时间
+  reviewedCount Int        @default(0)
+  lastReviewAt  DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+  word Word @relation(fields: [wordId], references: [id])
+
+  @@unique([userId, wordId])
+  @@index([userId, nextReviewAt])
+  @@index([userId, stage])
+  @@index([userId, isInErrorBook])
+}
+
+// ==================== Review Records (复习记录明细) ====================
+model ReviewRecord {
+  id           String   @id @default(cuid())
+  userId       String
+  wordId       String
+  reviewDate   DateTime @default(now())
+  stage        Int      // 复习时的记忆阶段
+  isCorrect    Boolean
+  responseTime Int?     // 反应时间(秒)
+  reviewType   String   // anti-forget | cycle | spelling | test
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+  word Word @relation(fields: [wordId], references: [id])
+
+  @@index([userId, reviewDate])
+  @@index([userId, wordId])
+}
+
+// ==================== Daily Learning Records (每日新学记录) ====================
+model DailyStats {
+  id              String   @id @default(cuid())
+  userId          String
+  date            DateTime
+  newWords        Int      @default(0)   // 新学单词数
+  reviewedWords   Int      @default(0)   // 复习单词数
+  totalWords      Int      @default(0)   // 总学习数
+  errorWords      Int      @default(0)   // 错词重学数
+  studyMinutes    Int      @default(0)   // 学习时长
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, date])
+  @@index([userId, date])
+}
+
+// ==================== Word Favorites (收藏/生词本) ====================
+model WordFavorite {
+  id        String   @id @default(cuid())
+  userId    String
+  wordId    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+  word Word @relation(fields: [wordId], references: [id])
+
+  @@unique([userId, wordId])
+}
+
+// ==================== Articles (阅读/时文/完形/听力素材) ====================
+model Article {
+  id          String   @id @default(cuid())
+  title       String
+  content     String
+  summary     String?
+  articleType String  // reading, current_affairs, cloze, listening, context
+  level       String  // 难度等级: 小学/初中/高中/自定义
+  source      String?
+  wordCount   Int     @default(0)
+  questions   String? // 题目JSON
+  keywords    String? // 关键词 (JSON array)
+  audioUrl    String? // 听力音频
+  isActive    Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([articleType, level])
+}
+
+// ==================== Courseware (课件库) ====================
+model Courseware {
+  id            String   @id @default(cuid())
+  wordBookId    String?
+  name          String
+  label         String   // 分类标签
+  fileUrl       String
+  fileType      String   // PDF, image, video, audio
+  coverImage    String?
+  userId        String
+  downloadCount Int      @default(0)
+  isFree        Boolean  @default(true)
+  level         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  wordBook WordBook? @relation(fields: [wordBookId], references: [id])
+  user     User     @relation(fields: [userId], references: [id])
+
+  @@index([wordBookId])
+}
+
+// ==================== Root Affix Library (词根词缀) ====================
+model RootAffix {
+  id          String   @id @default(cuid())
+  root        String   // 词根/词缀
+  type        String   // prefix, suffix, root
+  meaning     String   // 含义
+  origin      String?  // 来源(拉丁/希腊)
+  examples    String?  // 例词 (JSON array)
+  description String?  // 详细说明
+  createdAt   DateTime @default(now())
+
+  @@index([root])
+  @@index([type])
+}
+
+// ==================== Grammar Points (语法) ====================
+model GrammarPoint {
+  id          String   @id @default(cuid())
+  title       String
+  category    String   // 基本/进阶/重点难点
+  content     String   // HTML内容
+  examples    String?  // 例句 (JSON array)
+  exercises   String?  // 练习题 (JSON array)
+  difficulty  String?  // 难度: BASIC, INTERMEDIATE, ADVANCED
+  orderIndex  Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@index([category])
+  @@index([difficulty])
+}
+
+// ==================== Homework Record (作业记录) ====================
+model HomeworkRecord {
+  id             String   @id @default(cuid())
+  userId         String
+  wordId         String?
+  homeworkType   String   // spelling, dictation, translation
+  question       String   // 题目内容
+  answer         String   // 正确答案
+  userAnswer     String?  // 用户答案
+  isCorrect      Boolean?
+  score          Int      @default(0)
+  assignedAt     DateTime @default(now())
+  completedAt    DateTime?
+  createdAt      DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+  word Word? @relation(fields: [wordId], references: [id])
+
+  @@index([userId])
+}
+
+// ==================== Phonetic Symbols (音标) ====================
+model PhoneticSymbol {
+  id        String   @id @default(cuid())
+  symbol    String   // 音标符号
+  type      String   // vowel, consonant
+  examples  String?  // 例词 (JSON array)
+  audioUrl  String?  // 发音URL
+  tip       String?  // 发音技巧
+  createdAt DateTime @default(now())
+
+  @@index([type])
+}
+
+// ==================== Vocabulary Test (词汇量测试) ====================
+model VocabularyTest {
+  id          String   @id @default(cuid())
+  userId      String
+  score       Int      // 答对题数
+  total       Int      @default(60)
+  vocabulary  Int      // 估算词汇量
+  level       String   // L1-L10
+  details     String?  // 详细答题数据 JSON
+  testedAt    DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+// ==================== Referral Record (推广记录) ====================
+model ReferralRecord {
+  id          String   @id @default(cuid())
+  userId      String
+  type        String   // 教练版月卡/年卡/个人版...
+  commission  Int      // 佣金（元）
+  status      String   // 已结算/未结算
+  referrer    String?  // 被推广人
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+// ==================== Learning Sessions (学习会话) ====================
+model LearningSession {
+  id            String   @id @default(cuid())
+  userId        String
+  startTime     DateTime @default(now())
+  endTime       DateTime?
+  duration      Int?     // 分钟
+  wordsLearned  Int      @default(0)
+  wordsReviewed Int      @default(0)
+  sessionType   String   // learn, review, practice, test
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, startTime])
+}
